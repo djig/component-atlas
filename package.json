@@ -15,6 +15,14 @@
   ],
   "author": "Jignesh Dhamecha",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/djig/component-atlas.git"
+  },
+  "homepage": "https://github.com/djig/component-atlas#readme",
+  "bugs": {
+    "url": "https://github.com/djig/component-atlas/issues"
+  },
   "type": "module",
   "bin": {
     "component-atlas": "./dist/cli.js"
