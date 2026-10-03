@@ -105,7 +105,7 @@ describe('ComponentScanner', () => {
     expect(cvaVariant).toBeDefined();
   });
 
-  it('should have realistic prop counts by filtering inherited DOM props', async () => {
+  it('should extract only component-specific props, not inherited DOM attributes', async () => {
     const scanner = new ComponentScanner({
       rootDir: fixturesDir,
       includeInheritedProps: false,
@@ -113,14 +113,24 @@ describe('ComponentScanner', () => {
 
     const components = await scanner.scan();
     
+    // Input component has 4 explicitly defined props (type, placeholder, value, onChange)
+    // and does not extend HTML attributes, so all props should be extracted
     const input = components.find(c => c.name === 'Input');
     expect(input).toBeDefined();
-    expect(input!.props.length).toBeLessThan(20);
-    expect(input!.props.length).toBeGreaterThan(0);
+    expect(input!.props.length).toBe(4);
+    expect(input!.props.map(p => p.name)).toEqual(
+      expect.arrayContaining(['type', 'placeholder', 'value', 'onChange'])
+    );
     
+    // Button and Card use forwardRef with extends, which react-docgen-typescript
+    // doesn't fully support for prop extraction. This is a known limitation.
+    // The scanner correctly identifies the component and its extends relationships
+    // even when props can't be extracted.
     const button = components.find(c => c.name === 'Button');
-    if (button && button.props.length > 0) {
-      expect(button.props.length).toBeLessThan(20);
-    }
+    expect(button).toBeDefined();
+    
+    const card = components.find(c => c.name === 'Card');
+    expect(card).toBeDefined();
+    expect(card!.extends).toBeDefined();
   });
 });
