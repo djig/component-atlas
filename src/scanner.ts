@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as ts from 'typescript';
 import { parse as parseDocgen, ParserOptions } from 'react-docgen-typescript';
 import type { ComponentInfo, ComponentProp, ComponentVariant, ScanOptions } from './types.js';
 
@@ -101,9 +102,24 @@ export class ComponentScanner {
       const docs = parseDocgen(filePath, parserOptions);
       
       for (const doc of docs) {
-        const allProps = this.extractProps(doc);
+        let allProps = this.extractProps(doc);
         const extendsTypes = this.detectExtendsTypes(source, doc.displayName);
-        const { props, filteredCount } = this.filterInheritedProps(allProps, extendsTypes);
+        
+        // Always try manual extraction to supplement docgen (e.g., for missing 'children')
+        const manualProps = this.extractPropsManually(filePath, source, doc.displayName);
+        
+        // Track which props came from manual extraction (component-specific)
+        const manualPropNames = new Set(manualProps.map(p => p.name));
+        
+        // Merge props, preferring docgen but adding manual props that are missing
+        const propNames = new Set(allProps.map(p => p.name));
+        for (const manualProp of manualProps) {
+          if (!propNames.has(manualProp.name)) {
+            allProps.push(manualProp);
+          }
+        }
+        
+        const { props, filteredCount } = this.filterInheritedProps(allProps, extendsTypes, manualPropNames);
         const variants = this.extractVariants(source, doc.displayName);
         const { isServerComponent, isClientComponent } = this.detectComponentType(source);
         const isForwardRef = this.detectForwardRef(source, doc.displayName);
@@ -153,6 +169,138 @@ export class ComponentScanner {
     return props;
   }
 
+  private extractPropsManually(filePath: string, source: string, componentName: string): ComponentProp[] {
+    const props: ComponentProp[] = [];
+    
+    try {
+      // Create TypeScript source file and program for type checking
+      const sourceFile = ts.createSourceFile(
+        filePath,
+        source,
+        ts.ScriptTarget.Latest,
+        true
+      );
+
+      const compilerOptions: ts.CompilerOptions = {
+        target: ts.ScriptTarget.Latest,
+        module: ts.ModuleKind.ESNext,
+        jsx: ts.JsxEmit.React,
+        skipLibCheck: true,
+      };
+
+      const host = ts.createCompilerHost(compilerOptions);
+      const originalGetSourceFile = host.getSourceFile;
+      host.getSourceFile = (fileName, languageVersion) => {
+        if (fileName === filePath) {
+          return sourceFile;
+        }
+        return originalGetSourceFile(fileName, languageVersion);
+      };
+
+      const program = ts.createProgram([filePath], compilerOptions, host);
+      program.getTypeChecker(); // Initialize type checker
+
+      // Find the props interface/type
+      const propsInterfaceName = `${componentName}Props`;
+      let propsNode: ts.InterfaceDeclaration | ts.TypeAliasDeclaration | undefined;
+
+      const visit = (node: ts.Node) => {
+        if (ts.isInterfaceDeclaration(node) && node.name.text === propsInterfaceName) {
+          propsNode = node;
+        } else if (ts.isTypeAliasDeclaration(node) && node.name.text === propsInterfaceName) {
+          propsNode = node;
+        }
+        ts.forEachChild(node, visit);
+      };
+
+      visit(sourceFile);
+
+      if (propsNode) {
+        // Extract only own properties declared in this interface/type
+        if (ts.isInterfaceDeclaration(propsNode)) {
+          // For interfaces, only extract members directly on the interface body
+          // (not from extends clauses)
+          for (const member of propsNode.members) {
+            if (ts.isPropertySignature(member) && member.name && ts.isIdentifier(member.name)) {
+              const propName = member.name.text;
+              const isOptional = !!member.questionToken;
+              const typeNode = member.type;
+              const propType = typeNode ? this.getTypeString(typeNode, sourceFile) : 'unknown';
+
+              props.push({
+                name: propName,
+                type: propType,
+                required: !isOptional,
+                description: this.extractJsDocComment(member),
+              });
+            }
+          }
+        } else if (ts.isTypeAliasDeclaration(propsNode)) {
+          // Handle type alias - only extract from inline type literals
+          const typeNode = propsNode.type;
+          this.extractOwnPropsFromTypeNode(typeNode, sourceFile, props);
+        }
+      }
+    } catch (error) {
+      console.warn(`Manual prop extraction failed for ${componentName}:`, error);
+    }
+
+    return props;
+  }
+
+  private extractOwnPropsFromTypeNode(typeNode: ts.TypeNode, sourceFile: ts.SourceFile, props: ComponentProp[]): void {
+    if (ts.isTypeLiteralNode(typeNode)) {
+      // Extract props from inline type literal
+      for (const member of typeNode.members) {
+        if (ts.isPropertySignature(member) && member.name && ts.isIdentifier(member.name)) {
+          const propName = member.name.text;
+          const isOptional = !!member.questionToken;
+          const propTypeNode = member.type;
+          const propType = propTypeNode ? this.getTypeString(propTypeNode, sourceFile) : 'unknown';
+
+          props.push({
+            name: propName,
+            type: propType,
+            required: !isOptional,
+            description: this.extractJsDocComment(member),
+          });
+        }
+      }
+    } else if (ts.isIntersectionTypeNode(typeNode)) {
+      // For intersections, only extract from inline type literals (own props)
+      // Skip type references like React.ButtonHTMLAttributes or VariantProps
+      for (const type of typeNode.types) {
+        if (ts.isTypeLiteralNode(type)) {
+          this.extractOwnPropsFromTypeNode(type, sourceFile, props);
+        }
+      }
+    }
+    // Ignore type references, unions, etc. - those are "extends" not own props
+  }
+
+  private getTypeString(typeNode: ts.TypeNode, sourceFile: ts.SourceFile): string {
+    // Get the text of the type as it appears in source
+    const text = typeNode.getText(sourceFile);
+    
+    // Simplify common patterns
+    if (text.length > 100) {
+      return text.substring(0, 97) + '...';
+    }
+    
+    return text;
+  }
+
+  private extractJsDocComment(node: ts.Node): string | undefined {
+    const jsDoc = (node as any).jsDoc;
+    if (jsDoc && jsDoc.length > 0) {
+      const comment = jsDoc[0].comment;
+      if (typeof comment === 'string') {
+        return comment;
+      }
+    }
+    return undefined;
+  }
+
   private detectExtendsTypes(source: string, componentName: string): string[] {
     const extendsTypes: string[] = [];
     
@@ -177,46 +325,60 @@ export class ComponentScanner {
 
   private filterInheritedProps(
     props: ComponentProp[],
-    extendsTypes: string[]
+    extendsTypes: string[],
+    manualPropNames?: Set<string>
   ): { props: ComponentProp[]; filteredCount: number } {
     if (this.options.includeInheritedProps || extendsTypes.length === 0) {
       return { props, filteredCount: 0 };
     }
 
-    const commonHTMLProps = new Set([
+    // Props that are commonly useful even when inherited, so we keep them
+    // Also includes props that often have the same name as HTML attributes
+    // but are component-specific (like 'label' for form components)
+    const keepCommonProps = new Set([
       'className', 'style', 'id', 'children',
-      'onClick', 'onChange', 'onSubmit', 'onFocus', 'onBlur',
-      'disabled', 'type', 'value', 'name', 'placeholder',
-      'ref', 'key',
+      'label', // Common for form components
+      'error', // Common for form validation
     ]);
 
     const domAttributePatterns = [
-      /^on[A-Z]/, // Event handlers
+      /^on[A-Z]/, // Event handlers (onClick, onChange, etc.)
       /^aria-?/, // ARIA attributes
       /^data-?/, // Data attributes
     ];
 
+    // Comprehensive list of standard HTML attributes to filter out
     const htmlAttributes = new Set([
       'accept', 'acceptCharset', 'accessKey', 'action', 'allowFullScreen',
       'allowTransparency', 'alt', 'as', 'async', 'autoComplete', 'autoFocus',
       'autoPlay', 'capture', 'cellPadding', 'cellSpacing', 'challenge', 'charSet',
       'checked', 'cite', 'classID', 'cols', 'colSpan', 'content', 'contentEditable',
       'contextMenu', 'controls', 'coords', 'crossOrigin', 'dateTime', 'default',
-      'defer', 'dir', 'download', 'draggable', 'encType', 'form', 'formAction',
+      'defer', 'dir', 'disabled', 'download', 'draggable', 'encType', 'form', 'formAction',
       'formEncType', 'formMethod', 'formNoValidate', 'formTarget', 'frameBorder',
       'headers', 'height', 'hidden', 'high', 'href', 'hrefLang', 'htmlFor',
       'httpEquiv', 'icon', 'inputMode', 'integrity', 'is', 'keyParams', 'keyType',
       'kind', 'label', 'lang', 'list', 'loop', 'low', 'manifest', 'marginHeight',
       'marginWidth', 'max', 'maxLength', 'media', 'mediaGroup', 'method', 'min',
-      'minLength', 'multiple', 'muted', 'nonce', 'noValidate', 'open', 'optimum',
-      'pattern', 'ping', 'poster', 'preload', 'radioGroup', 'readOnly', 'rel',
+      'minLength', 'multiple', 'muted', 'name', 'nonce', 'noValidate', 'open', 'optimum',
+      'pattern', 'ping', 'placeholder', 'poster', 'preload', 'radioGroup', 'readOnly', 'rel',
       'required', 'reversed', 'role', 'rows', 'rowSpan', 'sandbox', 'scope',
-      'scoped', 'scrolling', 'seamless', 'selected', 'shape', 'size', 'sizes',
+      'scoped', 'scrolling', 'seamless', 'selected', 'shape', 'sizes',
       'slot', 'span', 'spellCheck', 'src', 'srcDoc', 'srcLang', 'srcSet', 'start',
       'step', 'summary', 'tabIndex', 'target', 'title', 'translate', 'useMap',
       'width', 'wmode', 'wrap',
       'defaultChecked', 'defaultValue', 'suppressContentEditableWarning',
       'suppressHydrationWarning', 'autoCapitalize', 'enterKeyHint',
+      // React-specific
+      'ref', 'key',
+      // Additional HTML/DOM attributes
+      'about', 'autoCapitalize', 'autoCorrect', 'autoSave', 'capture', 'color', 
+      'contentEditable', 'dangerouslySetInnerHTML', 'enterKeyHint', 'exportparts', 
+      'inert', 'inputMode', 'inlist', 'itemID', 'itemProp', 'itemRef',
+      'itemScope', 'itemType', 'part', 'popover', 'popoverTarget', 
+      'popoverTargetAction', 'prefix', 'property', 'resource', 'results',
+      'rev', 'security', 'translate', 'type', 'typeof', 'unselectable', 
+      'value', 'vocab',
     ]);
 
     const hasHTMLExtends = extendsTypes.some(t =>
@@ -226,7 +388,9 @@ export class ComponentScanner {
       t.includes('InputHTMLAttributes') ||
       t.includes('DivHTMLAttributes') ||
       t.includes('FormHTMLAttributes') ||
-      t.includes('AnchorHTMLAttributes')
+      t.includes('AnchorHTMLAttributes') ||
+      t.includes('TextareaHTMLAttributes') ||
+      t.includes('SelectHTMLAttributes')
     );
 
     if (!hasHTMLExtends) {
@@ -234,9 +398,24 @@ export class ComponentScanner {
     }
 
     const filtered = props.filter(prop => {
-      if (commonHTMLProps.has(prop.name)) return true;
-      if (htmlAttributes.has(prop.name)) return false;
+      // If prop was manually extracted (declared in component's own interface), always keep it
+      if (manualPropNames && manualPropNames.has(prop.name)) return true;
+      
+      // Keep common useful props
+      if (keepCommonProps.has(prop.name)) return true;
+      
+      // Filter out event handlers and aria/data attributes (always remove)
       if (domAttributePatterns.some(pattern => pattern.test(prop.name))) return false;
+      
+      // Special case: 'size' - keep if enum (component-specific), filter if number (HTML attribute)
+      if (prop.name === 'size') {
+        return prop.type === 'enum' || prop.type.includes('|');
+      }
+      
+      // Filter out known HTML/DOM attributes
+      if (htmlAttributes.has(prop.name)) return false;
+      
+      // Keep everything else (component-specific props)
       return true;
     });
 

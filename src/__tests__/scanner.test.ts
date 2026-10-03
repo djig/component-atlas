@@ -122,15 +122,57 @@ describe('ComponentScanner', () => {
       expect.arrayContaining(['type', 'placeholder', 'value', 'onChange'])
     );
     
-    // Button and Card use forwardRef with extends, which react-docgen-typescript
-    // doesn't fully support for prop extraction. This is a known limitation.
-    // The scanner correctly identifies the component and its extends relationships
-    // even when props can't be extracted.
+    // Button and Card use forwardRef with extends
     const button = components.find(c => c.name === 'Button');
     expect(button).toBeDefined();
     
     const card = components.find(c => c.name === 'Card');
     expect(card).toBeDefined();
     expect(card!.extends).toBeDefined();
+  });
+
+  it('should extract props from forwardRef components with extends and VariantProps', async () => {
+    const scanner = new ComponentScanner({
+      rootDir: fixturesDir,
+      includeInheritedProps: false,
+    });
+
+    const components = await scanner.scan();
+    
+    // ForwardRefButton extends ButtonHTMLAttributes and VariantProps,
+    // should extract own props (label, icon) from the interface declaration
+    const forwardRefButton = components.find(c => c.name === 'ForwardRefButton');
+    expect(forwardRefButton).toBeDefined();
+    expect(forwardRefButton!.isForwardRef).toBe(true);
+    
+    const propNames = forwardRefButton!.props.map(p => p.name);
+    // Must have own props explicitly declared in the interface
+    expect(propNames).toContain('label');
+    expect(propNames).toContain('icon');
+    // Should NOT have inherited HTML button props like 'disabled', 'type', 'formAction'
+    expect(propNames).not.toContain('disabled');
+    expect(propNames).not.toContain('formAction');
+    expect(propNames).not.toContain('autoFocus');
+    // Should have extends info
+    expect(forwardRefButton!.extends).toContain('React.ButtonHTMLAttributes<HTMLButtonElement>');
+  });
+
+  it('should extract props from memo-wrapped components', async () => {
+    const scanner = new ComponentScanner({
+      rootDir: fixturesDir,
+      includeInheritedProps: false,
+    });
+
+    const components = await scanner.scan();
+    
+    // MemoButton is wrapped with React.memo and has explicit props
+    const memoButton = components.find(c => c.name === 'MemoButton');
+    expect(memoButton).toBeDefined();
+    
+    const propNames = memoButton!.props.map(p => p.name);
+    expect(propNames).toContain('variant');
+    expect(propNames).toContain('children');
+    // Should not extract HTML attributes since it doesn't extend them
+    expect(memoButton!.props.length).toBeLessThanOrEqual(5);
   });
 });
