@@ -34,6 +34,7 @@ export interface ComponentInfo {
   isServerComponent?: boolean;
   isClientComponent?: boolean;
   isForwardRef?: boolean;
+  extends?: string[];
 }
 
 export interface ComponentManifest {
@@ -49,6 +50,7 @@ export interface ScanOptions {
   exclude?: string[];
   maxExamples?: number;
   skipVariants?: boolean;
+  includeInheritedProps?: boolean;
 }
 
 export interface DuplicateCheckResult {

@@ -13,6 +13,7 @@ export class ComponentScanner {
       exclude: options.exclude || ['**/node_modules/**', '**/dist/**', '**/*.test.tsx', '**/*.test.ts', '**/*.spec.tsx', '**/*.spec.ts'],
       maxExamples: options.maxExamples ?? 3,
       skipVariants: options.skipVariants ?? false,
+      includeInheritedProps: options.includeInheritedProps ?? false,
     };
   }
 
@@ -100,10 +101,16 @@ export class ComponentScanner {
       const docs = parseDocgen(filePath, parserOptions);
       
       for (const doc of docs) {
-        const props = this.extractProps(doc);
+        const allProps = this.extractProps(doc);
+        const extendsTypes = this.detectExtendsTypes(source, doc.displayName);
+        const { props, filteredCount } = this.filterInheritedProps(allProps, extendsTypes);
         const variants = this.extractVariants(source, doc.displayName);
         const { isServerComponent, isClientComponent } = this.detectComponentType(source);
         const isForwardRef = this.detectForwardRef(source, doc.displayName);
+        
+        if (filteredCount > 0) {
+          console.warn(`Filtered ${filteredCount} inherited props from ${doc.displayName}`);
+        }
         
         components.push({
           name: doc.displayName,
@@ -117,6 +124,7 @@ export class ComponentScanner {
           isServerComponent,
           isClientComponent,
           isForwardRef,
+          extends: extendsTypes.length > 0 ? extendsTypes : undefined,
         });
       }
     } catch {
@@ -143,6 +151,99 @@ export class ComponentScanner {
     }
     
     return props;
+  }
+
+  private detectExtendsTypes(source: string, componentName: string): string[] {
+    const extendsTypes: string[] = [];
+    
+    const patterns = [
+      new RegExp(`interface\\s+${componentName}Props\\s+extends\\s+([^{]+)\\s*\\{`, 's'),
+      new RegExp(`type\\s+${componentName}Props\\s*=\\s*[^&]*&\\s*([^{;]+)`, 's'),
+      new RegExp(`${componentName}\\s*=\\s*.*?forwardRef<[^,]+,\\s*([^>]+)>`, 's'),
+      new RegExp(`const\\s+${componentName}[^=]*=[^<]*<[^,]+,\\s*([^>]+)>`, 's'),
+    ];
+    
+    for (const pattern of patterns) {
+      const match = source.match(pattern);
+      if (match) {
+        const extendsStr = match[1];
+        const types = extendsStr.split(/[,&]/).map(t => t.trim()).filter(t => t.length > 0 && !t.startsWith('('));
+        extendsTypes.push(...types);
+      }
+    }
+    
+    return [...new Set(extendsTypes)];
+  }
+
+  private filterInheritedProps(
+    props: ComponentProp[],
+    extendsTypes: string[]
+  ): { props: ComponentProp[]; filteredCount: number } {
+    if (this.options.includeInheritedProps || extendsTypes.length === 0) {
+      return { props, filteredCount: 0 };
+    }
+
+    const commonHTMLProps = new Set([
+      'className', 'style', 'id', 'children',
+      'onClick', 'onChange', 'onSubmit', 'onFocus', 'onBlur',
+      'disabled', 'type', 'value', 'name', 'placeholder',
+      'ref', 'key',
+    ]);
+
+    const domAttributePatterns = [
+      /^on[A-Z]/, // Event handlers
+      /^aria-?/, // ARIA attributes
+      /^data-?/, // Data attributes
+    ];
+
+    const htmlAttributes = new Set([
+      'accept', 'acceptCharset', 'accessKey', 'action', 'allowFullScreen',
+      'allowTransparency', 'alt', 'as', 'async', 'autoComplete', 'autoFocus',
+      'autoPlay', 'capture', 'cellPadding', 'cellSpacing', 'challenge', 'charSet',
+      'checked', 'cite', 'classID', 'cols', 'colSpan', 'content', 'contentEditable',
+      'contextMenu', 'controls', 'coords', 'crossOrigin', 'dateTime', 'default',
+      'defer', 'dir', 'download', 'draggable', 'encType', 'form', 'formAction',
+      'formEncType', 'formMethod', 'formNoValidate', 'formTarget', 'frameBorder',
+      'headers', 'height', 'hidden', 'high', 'href', 'hrefLang', 'htmlFor',
+      'httpEquiv', 'icon', 'inputMode', 'integrity', 'is', 'keyParams', 'keyType',
+      'kind', 'label', 'lang', 'list', 'loop', 'low', 'manifest', 'marginHeight',
+      'marginWidth', 'max', 'maxLength', 'media', 'mediaGroup', 'method', 'min',
+      'minLength', 'multiple', 'muted', 'nonce', 'noValidate', 'open', 'optimum',
+      'pattern', 'ping', 'poster', 'preload', 'radioGroup', 'readOnly', 'rel',
+      'required', 'reversed', 'role', 'rows', 'rowSpan', 'sandbox', 'scope',
+      'scoped', 'scrolling', 'seamless', 'selected', 'shape', 'size', 'sizes',
+      'slot', 'span', 'spellCheck', 'src', 'srcDoc', 'srcLang', 'srcSet', 'start',
+      'step', 'summary', 'tabIndex', 'target', 'title', 'translate', 'useMap',
+      'width', 'wmode', 'wrap',
+      'defaultChecked', 'defaultValue', 'suppressContentEditableWarning',
+      'suppressHydrationWarning', 'autoCapitalize', 'enterKeyHint',
+    ]);
+
+    const hasHTMLExtends = extendsTypes.some(t =>
+      t.includes('HTMLAttributes') ||
+      t.includes('HTMLProps') ||
+      t.includes('ButtonHTMLAttributes') ||
+      t.includes('InputHTMLAttributes') ||
+      t.includes('DivHTMLAttributes') ||
+      t.includes('FormHTMLAttributes') ||
+      t.includes('AnchorHTMLAttributes')
+    );
+
+    if (!hasHTMLExtends) {
+      return { props, filteredCount: 0 };
+    }
+
+    const filtered = props.filter(prop => {
+      if (commonHTMLProps.has(prop.name)) return true;
+      if (htmlAttributes.has(prop.name)) return false;
+      if (domAttributePatterns.some(pattern => pattern.test(prop.name))) return false;
+      return true;
+    });
+
+    return {
+      props: filtered,
+      filteredCount: props.length - filtered.length,
+    };
   }
 
   private extractVariants(source: string, _componentName: string): ComponentVariant[] {

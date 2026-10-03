@@ -104,4 +104,23 @@ describe('ComponentScanner', () => {
     const cvaVariant = card?.variants.find(v => v.type === 'cva');
     expect(cvaVariant).toBeDefined();
   });
+
+  it('should have realistic prop counts by filtering inherited DOM props', async () => {
+    const scanner = new ComponentScanner({
+      rootDir: fixturesDir,
+      includeInheritedProps: false,
+    });
+
+    const components = await scanner.scan();
+    
+    const input = components.find(c => c.name === 'Input');
+    expect(input).toBeDefined();
+    expect(input!.props.length).toBeLessThan(20);
+    expect(input!.props.length).toBeGreaterThan(0);
+    
+    const button = components.find(c => c.name === 'Button');
+    if (button && button.props.length > 0) {
+      expect(button.props.length).toBeLessThan(20);
+    }
+  });
 });

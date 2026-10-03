@@ -174,6 +174,10 @@ export function generateMarkdownSummary(manifest: ComponentManifest): string {
     lines.push(`**File:** \`${component.filePath}\``);
     lines.push(`**Export:** ${component.exportType}`);
     
+    if (component.extends && component.extends.length > 0) {
+      lines.push(`**Extends:** ${component.extends.map(e => `\`${e}\``).join(', ')}`);
+    }
+    
     if (component.isClientComponent) {
       lines.push(`**Type:** Client Component`);
     } else if (component.isServerComponent) {

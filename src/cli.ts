@@ -52,6 +52,7 @@ SCAN OPTIONS:
   --exclude <pattern>       File patterns to exclude (can be repeated)
   --max-examples <n>        Maximum usage examples per component (default: 3)
   --skip-variants           Skip variant detection
+  --include-inherited       Include inherited DOM/HTML props (default: false)
   --no-cache                Disable incremental caching
 
 CHECK OPTIONS:
@@ -75,6 +76,7 @@ async function scan(args: string[]) {
     exclude: [] as string[],
     maxExamples: 3,
     skipVariants: false,
+    includeInheritedProps: false,
     useCache: true,
   };
 
@@ -101,6 +103,9 @@ async function scan(args: string[]) {
       case '--skip-variants':
         options.skipVariants = true;
         break;
+      case '--include-inherited':
+        options.includeInheritedProps = true;
+        break;
       case '--no-cache':
         options.useCache = false;
         break;
@@ -116,6 +121,7 @@ async function scan(args: string[]) {
     exclude: options.exclude.length > 0 ? options.exclude : undefined,
     maxExamples: options.maxExamples,
     skipVariants: options.skipVariants,
+    includeInheritedProps: options.includeInheritedProps,
   });
 
   const components = await scanner.scan();
