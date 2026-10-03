@@ -10,3 +10,6 @@ coverage/
 *.swp
 *.swo
 *~
+.component-atlas-cache.json
+atlas.json
+ATLAS.md
