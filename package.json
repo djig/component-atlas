@@ -1,0 +1,64 @@
+{
+  "name": "react-component-atlas",
+  "version": "0.1.0",
+  "description": "Scan React/Next.js codebases to build a manifest of components for coding agents. Stop hallucinating props and duplicating components.",
+  "keywords": [
+    "react",
+    "nextjs",
+    "typescript",
+    "components",
+    "design-system",
+    "coding-agents",
+    "mcp",
+    "ai",
+    "tooling"
+  ],
+  "author": "Jignesh Dhamecha",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "component-atlas": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/server.d.ts",
+      "import": "./dist/mcp/server.js"
+    }
+  },
+  "files": [
+    "dist",
+    "SKILL.md",
+    "README.md",
+    "LICENSE",
+    "CONTRIBUTING.md"
+  ],
+  "scripts": {
+    "build": "tsc && chmod +x dist/cli.js",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint 'src/**/*.ts' --ignore-pattern 'src/__tests__/**'",
+    "ci": "npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "react-docgen-typescript": "^2.2.2",
+    "typescript": "^5.6.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@typescript-eslint/eslint-plugin": "^8.15.0",
+    "@typescript-eslint/parser": "^8.15.0",
+    "eslint": "^9.15.0",
+    "globals": "^15.14.0",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
